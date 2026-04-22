@@ -57,9 +57,28 @@ jobs:
                   return None
               return sorted(candidates, key=lambda v: [int(x) for x in v.split('.')])[-1]
 
-          java_versions = ['8', '11', '17', '21', '25']
+          candidate_java_versions = ['8', '11', '17', '21', '25']
 
-          # ---------- 3. 计算本次期望的完整 tag 集合 ----------
+          # ---------- 3. 通过 Adoptium API 确认该 Java 版本已有 GA 发布 ----------
+          def adoptium_ga_exists(java_ver):
+              api = f"https://api.adoptium.net/v3/info/release_names?version=%5B{java_ver}%2C{int(java_ver)+1}%29&release_type=ga&page_size=1"
+              try:
+                  req = urllib.request.Request(api, headers={"Accept": "application/json"})
+                  with urllib.request.urlopen(req, timeout=15) as r:
+                      import json as _json
+                      data = _json.loads(r.read())
+                      return len(data.get('releases', [])) > 0
+              except Exception:
+                  return False
+
+          java_versions = []
+          for jv in candidate_java_versions:
+              if adoptium_ga_exists(jv):
+                  java_versions.append(jv)
+              else:
+                  print(f"::warning::No Adoptium GA release found for Java {jv}, skipping", file=sys.stderr)
+
+          # ---------- 4. 计算本次期望的完整 tag 集合 ----------
           desired_tags = []
           includes_all = []
           for minor in tracked_minors:
@@ -78,7 +97,7 @@ jobs:
                       'maven_major': major,
                   })
 
-          # ---------- 4. 读取 versions.env，找出尚未构建的 tag ----------
+          # ---------- 5. 读取 versions.env，找出尚未构建的 tag ----------
           force = os.environ.get('FORCE', 'false').lower() == 'true'
           built_tags = set()
           if not force and os.path.exists('versions.env'):
@@ -157,8 +176,8 @@ jobs:
             MAVEN_VERSION=${{ matrix.maven_version }}
             MAVEN_MAJOR=${{ matrix.maven_major }}
           tags: |
-            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_version }}
-            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_minor }}
+            ${{ env.GHCR_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_version }}
+            ${{ env.GHCR_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_minor }}
             ghcr.io/${{ env.GHCR_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_version }}
             ghcr.io/${{ env.GHCR_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_minor }}
           cache-from: type=gha
