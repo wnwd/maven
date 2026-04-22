@@ -1,0 +1,206 @@
+name: Build and Push Java+Maven Images
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # 每天 UTC 02:00 检查并构建
+  workflow_dispatch:        # 手动触发：忽略 versions.env，强制重建所有组合
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - '.github/workflows/build-and-push.yml'
+
+env:
+  # DOCKERHUB_USERNAME 需在仓库 Settings → Secrets and variables → Variables 中配置
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+  GHCR_USERNAME: ${{ github.repository_owner }}
+  IMAGE_NAME: java-maven
+
+jobs:
+  # ------------------------------------------------------------------ #
+  # Job 1: 检测 Maven 最新版本，对比 versions.env，生成待构建矩阵
+  # ------------------------------------------------------------------ #
+  detect-versions:
+    name: Detect new versions
+    runs-on: ubuntu-latest
+    outputs:
+      matrix:   ${{ steps.gen.outputs.matrix }}
+      has_new:  ${{ steps.gen.outputs.has_new }}
+      desired:  ${{ steps.gen.outputs.desired }}   # 本次期望的完整 tag 列表（换行分隔）
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate build matrix
+        id: gen
+        env:
+          # workflow_dispatch 时强制重建全部
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
+        run: |
+          python3 - <<'PYEOF'
+          import xml.etree.ElementTree as ET
+          import urllib.request, json, os, sys
+
+          # ---------- 1. 从 Maven Central 获取所有发布版本 ----------
+          url = "https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/maven-metadata.xml"
+          with urllib.request.urlopen(url, timeout=30) as resp:
+              tree = ET.parse(resp)
+          all_versions = [v.text for v in tree.findall('.//version')]
+
+          # ---------- 2. 追踪的 Maven minor 版本（按需增减） ----------
+          tracked_minors = ['3.6', '3.8', '3.9', '4.0']
+
+          def latest_patch(versions, minor):
+              candidates = [v for v in versions if v.startswith(minor + '.') and '-' not in v]
+              if not candidates:
+                  return None
+              return sorted(candidates, key=lambda v: [int(x) for x in v.split('.')])[-1]
+
+          java_versions = ['8', '11', '17', '21', '25']
+
+          # ---------- 3. 计算本次期望的完整 tag 集合 ----------
+          desired_tags = []
+          includes_all = []
+          for minor in tracked_minors:
+              version = latest_patch(all_versions, minor)
+              if version is None:
+                  print(f"::warning::No release found for Maven {minor}.x, skipping", file=sys.stderr)
+                  continue
+              major = minor.split('.')[0]
+              for java in java_versions:
+                  tag = f"java{java}-maven{version}"
+                  desired_tags.append(tag)
+                  includes_all.append({
+                      'java_version': java,
+                      'maven_version': version,
+                      'maven_minor': minor,
+                      'maven_major': major,
+                  })
+
+          # ---------- 4. 读取 versions.env，找出尚未构建的 tag ----------
+          force = os.environ.get('FORCE', 'false').lower() == 'true'
+          built_tags = set()
+          if not force and os.path.exists('versions.env'):
+              with open('versions.env') as f:
+                  for line in f:
+                      line = line.strip()
+                      if line and not line.startswith('#'):
+                          built_tags.add(line)
+
+          new_includes = [item for item in includes_all
+                          if f"java{item['java_version']}-maven{item['maven_version']}" not in built_tags]
+
+          has_new = len(new_includes) > 0
+          matrix = {'include': new_includes if has_new else [{'_skip': 'true'}]}
+
+          # ---------- 5. 写入 GITHUB_OUTPUT ----------
+          desired_str = '\n'.join(desired_tags)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"matrix={json.dumps(matrix)}\n")
+              f.write(f"has_new={'true' if has_new else 'false'}\n")
+              # 多行值使用 heredoc 格式
+              f.write(f"desired<<EOF\n{desired_str}\nEOF\n")
+
+          print(f"Total desired tags : {len(desired_tags)}")
+          print(f"Already built      : {len(built_tags)}")
+          print(f"To build           : {len(new_includes)}")
+          PYEOF
+
+  # ------------------------------------------------------------------ #
+  # Job 2: 矩阵构建并推送镜像（仅构建新增组合）
+  # ------------------------------------------------------------------ #
+  build-push:
+    name: "Java ${{ matrix.java_version }} + Maven ${{ matrix.maven_version }}"
+    needs: detect-versions
+    if: needs.detect-versions.outputs.has_new == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write   # 推送到 ghcr.io
+
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-versions.outputs.matrix) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU (multi-arch)
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          build-args: |
+            JAVA_VERSION=${{ matrix.java_version }}
+            MAVEN_VERSION=${{ matrix.maven_version }}
+            MAVEN_MAJOR=${{ matrix.maven_major }}
+          tags: |
+            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_version }}
+            ${{ env.DOCKERHUB_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_minor }}
+            ghcr.io/${{ env.GHCR_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_version }}
+            ghcr.io/${{ env.GHCR_USERNAME }}/${{ env.IMAGE_NAME }}:java${{ matrix.java_version }}-maven${{ matrix.maven_minor }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # ------------------------------------------------------------------ #
+  # Job 3: 所有构建成功后，更新 versions.env 并 commit 回仓库
+  # ------------------------------------------------------------------ #
+  update-versions:
+    name: Update versions.env
+    needs: [detect-versions, build-push]
+    # 仅在所有 build-push job 全部成功时执行
+    if: needs.build-push.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Overwrite versions.env with desired state
+        env:
+          DESIRED: ${{ needs.detect-versions.outputs.desired }}
+        run: |
+          {
+            echo "# 此文件由 GitHub Actions 自动维护，记录已成功构建并推送的镜像 tag。"
+            echo "# 格式：每行一个 tag，即 java{JAVA_VERSION}-maven{MAVEN_VERSION}"
+            echo "# 手动触发构建（workflow_dispatch）会忽略此文件，强制重新构建所有组合。"
+            echo "#"
+            echo "${DESIRED}"
+          } > versions.env
+
+      - name: Commit and push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add versions.env
+          # 若文件无变化则跳过 commit（避免空提交）
+          git diff --staged --quiet \
+            || git commit -m "chore: update built versions [skip ci]"
+          git push
