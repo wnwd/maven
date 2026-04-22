@@ -24,7 +24,6 @@ This was chosen over `eclipse-temurin:{version}-jdk-bookworm` because eclipse-te
 detect-versions
   ├─ Fetches Maven metadata XML from Maven Central
   ├─ Resolves latest patch for each tracked minor (3.6 / 3.8 / 3.9 / 4.0)
-  ├─ Calls Adoptium API to confirm GA availability for each Java version
   ├─ Reads versions.env to find already-built tags
   └─ Outputs:
        matrix   — new combos only (for build-push job)

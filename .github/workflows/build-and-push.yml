@@ -59,28 +59,7 @@ jobs:
 
           candidate_java_versions = ['8', '11', '17', '21', '25']
 
-          # ---------- 3. 通过 Adoptium API 获取所有已有 GA 发布的版本号 ----------
-          try:
-              req = urllib.request.Request(
-                  "https://api.adoptium.net/v3/info/available_releases",
-                  headers={"Accept": "application/json"}
-              )
-              with urllib.request.urlopen(req, timeout=15) as r:
-                  available = json.loads(r.read())
-              # available_releases 包含所有有 GA 的版本（含非 LTS）
-              ga_versions = {str(v) for v in available.get('available_releases', [])}
-          except Exception as e:
-              print(f"::warning::Failed to fetch Adoptium available_releases: {e}", file=sys.stderr)
-              ga_versions = set(candidate_java_versions)  # 降级：全部保留
-
-          java_versions = []
-          for jv in candidate_java_versions:
-              if jv in ga_versions:
-                  java_versions.append(jv)
-              else:
-                  print(f"::warning::No Adoptium GA release found for Java {jv}, skipping", file=sys.stderr)
-
-          # ---------- 4. 计算本次期望的完整 tag 集合 ----------
+          # ---------- 3. 计算本次期望的完整 tag 集合 ----------
           desired_tags = []
           includes_all = []
           for minor in tracked_minors:
@@ -99,7 +78,7 @@ jobs:
                       'maven_major': major,
                   })
 
-          # ---------- 5. 读取 versions.env，找出尚未构建的 tag ----------
+          # ---------- 4. 读取 versions.env，找出尚未构建的 tag ----------
           force = os.environ.get('FORCE', 'false').lower() == 'true'
           built_tags = set()
           if not force and os.path.exists('versions.env'):
