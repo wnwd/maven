@@ -68,7 +68,7 @@ jobs:
                   print(f"::warning::No release found for Maven {minor}.x, skipping", file=sys.stderr)
                   continue
               major = minor.split('.')[0]
-              for java in java_versions:
+              for java in candidate_java_versions:
                   tag = f"java{java}-maven{version}"
                   desired_tags.append(tag)
                   includes_all.append({
