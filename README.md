@@ -6,8 +6,8 @@ Automated Docker images combining Java LTS versions and Apache Maven, built dail
 
 | Registry | Image |
 |----------|-------|
-| Docker Hub | `YOUR_DOCKERHUB_USERNAME/java-maven` |
-| GHCR | `ghcr.io/YOUR_GITHUB_USERNAME/java-maven` |
+| Docker Hub | `wnwd/java-maven` |
+| GHCR | `ghcr.io/wnwd/java-maven` |
 
 ## Tags
 
@@ -37,13 +37,13 @@ Tags follow the pattern `java{JAVA_VERSION}-maven{MAVEN_VERSION}`:
 
 ```bash
 # Java 21 + Maven 3.9（最新 patch）
-docker pull YOUR_DOCKERHUB_USERNAME/java-maven:java21-maven3.9
+docker pull wnwd/java-maven:java21-maven3.9
 
 # Java 17 + Maven 3.8 精确版本（来自 GHCR）
-docker pull ghcr.io/YOUR_GITHUB_USERNAME/java-maven:java17-maven3.8.8
+docker pull ghcr.io/wnwd/java-maven:java17-maven3.8.8
 
 # 在 Dockerfile 中使用
-FROM YOUR_DOCKERHUB_USERNAME/java-maven:java21-maven3.9
+FROM wnwd/java-maven:java21-maven3.9
 COPY . /app
 WORKDIR /app
 RUN mvn package -DskipTests
